@@ -31,7 +31,7 @@
 
 ```bash
 python main.py
-python -m py_compile *.py
+python -m compileall -q .
 ```
 
 ### 手机端
