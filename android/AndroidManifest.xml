@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.cleanmaster.link"
+    android:versionCode="10"
+    android:versionName="1.8.1">
+
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
+
+    <!-- 局域网 HTTP / WebSocket / UDP 发现 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <!-- 前台服务：维持 WebSocket 长连接 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- Android 13+ 显示通知需要运行时授权 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 手机当麦克风：采集录音（Android 6+ 运行时申请） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- 息屏后继续采集：麦克风工作期间持有 CPU 唤醒锁 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- 可选：开机自启（当前未实现自启逻辑，仅保留权限声明） -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:label="@string/app_name"
+        android:theme="@android:style/Theme.Material.Light"
+        android:allowBackup="true"
+        android:usesCleartextTraffic="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 后台长连接服务（Android 14+ 需声明 dataSync 类型） -->
+        <service
+            android:name=".LinkService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- 通知转发：需要用户授予「通知使用权」 -->
+        <service
+            android:name=".NotifyListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+    </application>
+</manifest>
