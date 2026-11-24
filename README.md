@@ -11,6 +11,28 @@
 
 ---
 
+## 下载安装
+
+前往 [Releases](https://github.com/H-S-10086/heshu-hs/releases/latest) 下载最新版：
+
+| 平台 | 文件 | 说明 |
+| --- | --- | --- |
+| Windows 10/11 | [HeShu-HS-Setup-2.0.0.exe](https://github.com/H-S-10086/heshu-hs/releases/download/v2.0.0/HeShu-HS-Setup-2.0.0.exe) | 电脑端安装包（内部已附带手机 APK） |
+| Android 7.0+ | [CleanMasterLink.apk](https://github.com/H-S-10086/heshu-hs/releases/download/v2.0.0/CleanMasterLink.apk) | 手机 App，覆盖安装即可 |
+
+安装步骤：
+
+1. 双击 Windows 安装包完成安装，从开始菜单启动「合枢 HS」。
+2. 把 APK 传到手机安装（数据线、网盘或电脑端「手机互传」都可以）。
+3. 电脑打开「设备协同」→「开启协同服务」；手机打开 App →「搜索设备」→ 选择电脑 → 在电脑上点「允许」。
+
+SHA-256 校验值：
+
+- `HeShu-HS-Setup-2.0.0.exe`：`4a9aa71702661bc48330d7c823fc240eaf254c998c1617adf355f263342d6d6a`
+- `CleanMasterLink.apk`：`0830ae64418e16602740090fcdbb0daede7075a4741b8c521b7c95b29298a640`
+
+---
+
 ## 功能特性
 
 ### 电脑端（Python + tkinter）
