@@ -753,7 +753,9 @@ class StartupPage:
 
         tk.Label(parent,
                  text="说明：计划任务名称固定为「C盘清理大师-自动清理」；"
-                      "创建和删除计划任务都需要管理员权限，请以管理员身份运行本程序。",
+                      "创建和删除计划任务都需要管理员权限，请以管理员身份运行本程序。\n"
+                      "自动清理默认只清系统垃圾，不会删除微信/QQ 接收的文件；"
+                      "如确需清理社交缓存，请在脚本参数后追加 --include-social（只清 30 天前的文件）。",
                  bg=T.BG, fg=T.TEXT_LIGHT, font=("Microsoft YaHei", 9),
                  wraplength=900, justify=tk.LEFT).pack(anchor=tk.W, padx=12, pady=(0, 8))
 

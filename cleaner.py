@@ -5,13 +5,33 @@
 """
 
 import os
-import shutil
+import stat
+import time
 import ctypes
+import shutil
 import subprocess
 import tempfile
 from ctypes import wintypes
 
-from scanner import get_size, format_size
+from scanner import format_size
+
+
+class _SHQUERYRBINFO(ctypes.Structure):
+    """SHQueryRecycleBinW 的返回结构：当前用户回收站的总大小与文件数"""
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("i64Size", ctypes.c_longlong),
+        ("i64NumItems", ctypes.c_longlong),
+    ]
+
+
+_shell32 = ctypes.windll.shell32
+# 必须声明类型，否则 64 位下指针参数会被默认按 int 截断
+_shell32.SHQueryRecycleBinW.argtypes = [
+    wintypes.LPCWSTR, ctypes.POINTER(_SHQUERYRBINFO)]
+_shell32.SHQueryRecycleBinW.restype = ctypes.c_long
+_shell32.SHEmptyRecycleBinW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.DWORD]
+_shell32.SHEmptyRecycleBinW.restype = ctypes.c_long
 
 
 class CleanResult:
@@ -46,47 +66,93 @@ class CleanEngine:
 
     def __init__(self, progress_callback=None):
         self.progress_callback = progress_callback
+        # 最近一次清理中被占用 / 无权限的文件，供界面提示
+        self.last_skipped = []
 
     def _emit(self, percent, message):
         if self.progress_callback:
             self.progress_callback(percent, message)
 
+    def _skip(self, path, reason):
+        self.last_skipped.append((path, reason))
+
     # ==================== 通用清理 ====================
 
-    def clean_directory_contents(self, path):
-        """清空目录内容（保留目录本身）"""
+    def clean_directory_contents(self, path, min_age_days=0):
+        """
+        清空目录内容（保留目录本身），返回**真正删除成功**的字节数。
+
+        不再"先算大小再 rmtree(ignore_errors=True)"——被浏览器/微信占用的文件
+        删不掉却仍计入释放量，会让用户误以为释放了很多空间。
+        """
         freed = 0
-        if not os.path.exists(path):
-            return freed
-        for entry in os.listdir(path):
-            full = os.path.join(path, entry)
-            try:
-                if os.path.isfile(full) or os.path.islink(full):
-                    sz = os.path.getsize(full)
-                    os.remove(full)
+        if not os.path.isdir(path):
+            return 0
+        cutoff = time.time() - min_age_days * 86400 if min_age_days > 0 else 0
+
+        for root, dirs, files in os.walk(path, topdown=False,
+                                         onerror=lambda e: None):
+            for name in files:
+                full = os.path.join(root, name)
+                try:
+                    st = os.stat(full, follow_symlinks=False)
+                    if cutoff and st.st_mtime > cutoff:
+                        continue          # 太新的文件保留（自动清理的年龄阈值）
+                    sz = st.st_size
+                    try:
+                        os.remove(full)
+                    except PermissionError:
+                        # 只读文件去掉只读属性后再试一次
+                        os.chmod(full, stat.S_IWRITE)
+                        os.remove(full)
                     freed += sz
-                elif os.path.isdir(full):
-                    sz = get_size(full)
-                    shutil.rmtree(full, ignore_errors=True)
-                    freed += sz
-            except (OSError, PermissionError):
-                pass
+                except (OSError, PermissionError):
+                    self._skip(full, "被占用或无权限")
+            for name in dirs:
+                try:
+                    os.rmdir(os.path.join(root, name))
+                except OSError:
+                    pass
         return freed
 
-    def clean_file(self, path):
-        """删除单个文件"""
+    def clean_file(self, path, min_age_days=0):
+        """删除单个文件，返回真正释放的字节数"""
         try:
-            sz = os.path.getsize(path)
-            os.remove(path)
+            st = os.stat(path, follow_symlinks=False)
+            if min_age_days > 0 and st.st_mtime > time.time() - min_age_days * 86400:
+                return 0
+            sz = st.st_size
+            try:
+                os.remove(path)
+            except PermissionError:
+                os.chmod(path, stat.S_IWRITE)
+                os.remove(path)
             return sz
         except (OSError, PermissionError):
+            self._skip(path, "被占用或无权限")
             return 0
 
-    def clean_results(self, scan_results):
-        """根据扫描结果列表执行清理，返回释放总字节"""
+    def clean_results(self, scan_results, social_min_age_days=0):
+        """
+        根据扫描结果列表执行清理，返回实际释放总字节。
+
+        social_min_age_days > 0 时，社交软件缓存只删除早于该天数的文件，
+        用于计划任务里"只清 30 天前的聊天缓存"。
+        """
+        self.last_skipped = []
         total_freed = 0
         total = len(scan_results)
         for i, r in enumerate(scan_results):
+            if not getattr(r, "cleanable", True):
+                self._skip(getattr(r, "path", ""), "提示项，未执行删除")
+                continue
+
+            paths = list(getattr(r, "paths", None) or [])
+            if not paths:
+                paths = [p.strip() for p in (getattr(r, "path", "") or "").split("; ")
+                         if p.strip()]
+            age = social_min_age_days if getattr(r, "social", False) else 0
+
             if r.path in ("回收站(所有盘符)", "浏览器缓存目录"):
                 # 特殊处理
                 if r.source == "回收站":
@@ -111,39 +177,51 @@ class CleanEngine:
                 else:
                     freed = 0
             else:
-                # 通用：路径可能是;分隔的多个路径
+                # 通用：按 paths 列表逐个清理（不再依赖分号字符串）
                 freed = 0
-                for p in r.path.split("; "):
-                    p = p.strip()
+                for p in paths:
                     if os.path.isdir(p):
-                        freed += self.clean_directory_contents(p)
+                        freed += self.clean_directory_contents(p, min_age_days=age)
                     elif os.path.isfile(p):
-                        freed += self.clean_file(p)
+                        freed += self.clean_file(p, min_age_days=age)
 
             total_freed += freed
             percent = int((i + 1) / total * 100) if total > 0 else 100
-            self._emit(percent, f"已清理: {r.source} (释放 {format_size(freed)})")
+            self._emit(percent, f"已清理: {r.source} (实际释放 {format_size(freed)})")
 
         return total_freed
 
     # ==================== 特殊清理 ====================
 
-    def empty_recycle_bin(self):
-        """清空回收站，返回实际释放的字节数"""
-        # 先统计各盘回收站的体积，再清空，这样才能回报真实的释放量
-        size_before = 0
-        for drive in ['C', 'D', 'E', 'F', 'G', 'H']:
-            recycle_path = os.path.join(drive + ':\\', '$Recycle.Bin')
-            if os.path.exists(recycle_path):
-                size_before += get_size(recycle_path)
+    @staticmethod
+    def _recycle_bin_size():
+        """当前用户所有盘符回收站的精确大小（不包含其它用户）"""
         try:
-            # SHEmptyRecycleBin: SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND
-            result = ctypes.windll.shell32.SHEmptyRecycleBinW(None, None, 0x0007)
-            if result in (0, 0x80004005):  # S_OK or some benign error
-                return size_before
+            info = _SHQUERYRBINFO()
+            info.cbSize = ctypes.sizeof(info)
+            res = _shell32.SHQueryRecycleBinW(None, ctypes.byref(info))
+            if res == 0:
+                return max(0, int(info.i64Size))
         except Exception:
             pass
         return 0
+
+    def empty_recycle_bin(self):
+        """
+        清空回收站，返回**实际**释放的字节数。
+
+        旧写法用 $Recycle.Bin 目录体积当大小，且在 SHEmptyRecycleBinW
+        返回 0x80004005（回收站本来为空）时仍然上报全量。这里改为
+        SHQueryRecycleBinW 取当前用户的精确值，清理后再取一次做差值。
+        """
+        before = self._recycle_bin_size()
+        try:
+            # SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND
+            _shell32.SHEmptyRecycleBinW(None, None, 0x0007)
+        except Exception:
+            pass
+        after = self._recycle_bin_size()
+        return max(0, before - after)
 
     def disable_hibernation(self):
         """关闭休眠（释放 hiberfil.sys），返回实际释放的字节数"""

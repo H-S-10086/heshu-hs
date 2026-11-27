@@ -582,7 +582,7 @@ class SysReclaimEngine:
     # ==================== 空文件夹 ====================
 
     def scan_empty_folders(self, roots=None, max_scan_dirs=200000):
-        """扫描完全为空的文件夹（递归判定：子目录也无文件）"""
+        """扫描完全为空的文件夹（递归判定：自身无文件且所有子目录也为空）"""
         self._emit(82, "正在查找空文件夹...")
         if roots is None:
             up = os.environ.get("USERPROFILE", "")
@@ -590,36 +590,54 @@ class SysReclaimEngine:
                      ("Desktop", "Documents", "Downloads", "Pictures", "Music", "Videos")]
             roots = [r for r in roots if os.path.isdir(r)]
 
-        empty = []
-        scanned = 0
         skip = {"$Recycle.Bin", "Windows", "WinSxS", "System Volume Information",
                 "node_modules", ".git", "$WinREAgent"}
+        empty_dirs = set()
+        scanned = 0
 
         for root in roots:
-            for dirpath, dirnames, filenames in os.walk(root, topdown=False,
-                                                        onerror=lambda e: None):
+            # 先 topdown 剪枝收集目录（跳过集真正生效），再自底向上判定
+            walked = []
+            for dirpath, dirnames, filenames in os.walk(
+                    root, topdown=True, onerror=lambda e: None):
                 if self._stop:
                     break
+                dirnames[:] = [d for d in dirnames if d not in skip]
+                walked.append((dirpath, filenames))
                 scanned += 1
                 if scanned > max_scan_dirs:
                     break
-                dirnames[:] = [d for d in dirnames if d not in skip]
+            if self._stop:
+                break
+
+            for dirpath, filenames in reversed(walked):
+                if filenames or dirpath == root:
+                    continue          # 根目录本身不删；有文件也不算空
                 try:
                     entries = os.listdir(dirpath)
                 except (OSError, PermissionError):
                     continue
-                if not entries:
-                    # 确认为空（os.listdir 包含隐藏文件，因此这里确实是空的）
-                    empty.append(dirpath)
+                is_empty = True
+                for name in entries:
+                    full = os.path.join(dirpath, name)
+                    if os.path.isdir(full):
+                        if full not in empty_dirs:
+                            is_empty = False
+                            break
+                    else:
+                        is_empty = False
+                        break
+                if is_empty:
+                    empty_dirs.add(dirpath)
 
         results = []
-        for path in empty:
+        for path in sorted(empty_dirs, key=len, reverse=True):
             results.append(ScanResult(
                 category="系统清理",
                 source="空文件夹",
                 path=path,
                 size=0,
-                description="该文件夹内没有任何文件或子文件夹，可安全删除。",
+                description="该文件夹自身没有文件，且所有子目录也为空，可安全删除。",
             ))
         self._emit(88, f"发现 {len(results)} 个空文件夹")
         return results
@@ -628,7 +646,8 @@ class SysReclaimEngine:
         """删除空文件夹（只删确实为空的，非空的一律跳过）"""
         deleted = 0
         failed = []
-        for p in paths:
+        # 深的先删：父目录只有在子目录删完后才会变空
+        for p in sorted(paths, key=len, reverse=True):
             try:
                 if os.path.isdir(p) and not os.listdir(p):
                     os.rmdir(p)

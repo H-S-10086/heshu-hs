@@ -214,15 +214,15 @@ def _job_disk_report(progress_cb):
 SCAN_JOBS = {
     "quick": ("一键快速扫描", "快速扫描系统垃圾、临时文件、缓存、回收站等，耗时最短",
               lambda cb: ScanEngine(cb).scan_quick()),
-    "all": ("C盘瘦身", "全方位扫描 C 盘：系统垃圾、缓存、社交软件缓存、隐私痕迹等",
+    "all": ("C盘瘦身", "全方位扫描 C 盘：系统垃圾、缓存、社交软件缓存、隐私痕迹等（默认不含已接收文件）",
             lambda cb: ScanEngine(cb).scan_all()),
     "deep": ("深度清理", "深度扫描全部垃圾，并额外检查旧系统备份、组件存储、还原点等深层占用",
              _job_deep),
     "deep_reclaim": ("深层空间回收", "回收普通清理工具够不到的空间：Windows.old、WinSxS 组件存储、历史驱动、还原点、空文件夹",
                      _job_deep_reclaim),
-    "wechat": ("微信专清", "清理微信聊天缓存、接收文件、图片视频等",
+    "wechat": ("微信专清", "默认只清缓存/图片/视频；已接收文件需勾选",
                lambda cb: _single_scan(cb, lambda e: e.scan_wechat())),
-    "qq": ("QQ专清", "清理 QQ 聊天图片、文件、视频缓存等",
+    "qq": ("QQ专清", "默认只清缓存/图片/视频；已接收文件需勾选",
            lambda cb: _single_scan(cb, lambda e: e.scan_qq())),
     "privacy": ("隐私清理", "清理最近文档、剪贴板历史、图标缓存等隐私痕迹",
                 lambda cb: _single_scan(cb, lambda e: e.scan_privacy_traces())),
@@ -406,7 +406,7 @@ class CleanerApp:
         footer = tk.Frame(inner, bg=Theme.SIDEBAR)
         footer.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=12)
         if is_admin():
-            tk.Label(footer, text="合枢 HS  v2.0.1", bg=Theme.SIDEBAR, fg="#5a6b7c",
+            tk.Label(footer, text="合枢 HS  v2.1.0", bg=Theme.SIDEBAR, fg="#5a6b7c",
                      font=("Microsoft YaHei", 8), anchor=tk.W).pack(fill=tk.X)
             tk.Label(footer, text="✓ 已获得管理员权限", bg=Theme.SIDEBAR, fg="#73d13d",
                      font=("Microsoft YaHei", 8), anchor=tk.W).pack(fill=tk.X, pady=(2, 0))
@@ -908,6 +908,13 @@ class CleanerApp:
                        activebackground=Theme.CARD_BG,
                        command=self._toggle_select_all).pack(side=tk.LEFT, padx=10)
 
+        # 社交软件默认只清缓存/图片/视频；已接收文件需要用户显式勾选
+        self.social_files_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(inner, text="包含已接收文件/附件", variable=self.social_files_var,
+                       bg=Theme.CARD_BG, fg=Theme.TEXT,
+                       font=("Microsoft YaHei", 9),
+                       activebackground=Theme.CARD_BG).pack(side=tk.LEFT, padx=4)
+
         self.scan_summary = tk.Label(inner, text="尚未扫描", bg=Theme.CARD_BG,
                                      fg=Theme.TEXT_LIGHT,
                                      font=("Microsoft YaHei", 9))
@@ -955,6 +962,11 @@ class CleanerApp:
         for row in self.tree.get_children():
             self.tree.delete(row)
         self.scan_summary.config(text="扫描中...")
+        try:
+            import scanner as _scanner
+            _scanner.set_social_include_files(bool(self.social_files_var.get()))
+        except Exception:
+            pass
 
         def work(progress_cb):
             _title, _desc, fn = SCAN_JOBS.get(self.scan_job_key, SCAN_JOBS["quick"])
@@ -982,7 +994,8 @@ class CleanerApp:
 
     def _render_scan_results(self, results):
         self.scan_results = list(results)
-        total_size = sum(getattr(r, "size", 0) for r in self.scan_results)
+        total_size = sum(getattr(r, "size", 0) for r in self.scan_results
+                         if getattr(r, "cleanable", True))
 
         if not self.scan_results:
             self.scan_summary.config(text="未发现可清理项目")
@@ -1005,12 +1018,17 @@ class CleanerApp:
             ))
 
         counts = {}
+        hint_count = 0
         for r in self.scan_results:
             counts[getattr(r, "category", "其他")] = counts.get(getattr(r, "category", "其他"), 0) + 1
+            if not getattr(r, "cleanable", True):
+                hint_count += 1
         detail = "、".join(f"{k} {v} 项" for k, v in counts.items())
+        if hint_count:
+            detail += f"（其中提示项 {hint_count} 项不参与清理）"
         self.scan_summary.config(text=f"共 {len(self.scan_results)} 项：{detail}")
         self.set_size_hint(f"可清理: {format_size(total_size)}")
-        self.set_status(f"扫描完成，共 {len(self.scan_results)} 项，合计 {format_size(total_size)}")
+        self.set_status(f"扫描完成，共 {len(self.scan_results)} 项，可清理 {format_size(total_size)}")
         self.clean_btn.config(state=tk.NORMAL)
 
     # ---------- 清理 ----------
@@ -1032,10 +1050,11 @@ class CleanerApp:
             self.show_warning("提示", "请先勾选要清理的项目")
             return
 
-        total_size = sum(getattr(r, "size", 0) for r in to_clean)
+        total_size = sum(getattr(r, "size", 0) for r in to_clean
+                         if getattr(r, "cleanable", True))
         if not self.ask_yes_no(
                 "确认清理",
-                f"即将处理 {len(to_clean)} 个项目，预计释放约 {format_size(total_size)}。\n\n"
+                f"即将处理 {len(to_clean)} 个项目，可清理项合计约 {format_size(total_size)}。\n\n"
                 "· 部分操作不可恢复（如回收站、文件删除）\n"
                 "· 注册表类操作会先自动备份\n"
                 "· 提示类项目（如硬件告警）不会被执行删除\n\n是否继续？"):
@@ -1268,7 +1287,11 @@ class CleanerApp:
                 # 借用现有清理引擎的分派逻辑；它已处理临时目录/回收站/浏览器缓存/休眠文件等
                 freed_generic = self.clean_engine.clean_results(sub_results)
                 freed += freed_generic
-                logs.append(f"文件清理：释放 {format_size(freed_generic)}")
+                logs.append(f"文件清理：实际释放 {format_size(freed_generic)}")
+                skipped_files = getattr(self.clean_engine, "last_skipped", [])
+                if skipped_files:
+                    logs.append(f"跳过 {len(skipped_files)} 个被占用/无权限文件"
+                                "（关闭微信/QQ/浏览器后可重试）")
             except Exception as e:
                 logs.append(f"文件清理失败：{e}")
             _bump("文件清理完成")
@@ -1567,13 +1590,17 @@ def get_size_safe(path):
 
 def main():
     # 无人值守模式：计划任务在打包为 exe 后同样可用
-    #   "C盘清理大师.exe" --auto-clean         快速清理
-    #   "C盘清理大师.exe" --auto-clean --full  完整清理（含微信/QQ 缓存）
+    #   "C盘清理大师.exe" --auto-clean         快速清理（只清系统垃圾）
+    #   "C盘清理大师.exe" --auto-clean --full  完整扫描（默认仍只清系统垃圾）
+    #   追加 --include-social 才会清理微信/QQ 缓存（且只清 30 天前的文件）
     if "--auto-clean" in sys.argv:
         full = "--full" in sys.argv
+        include_social = "--include-social" in sys.argv
         try:
             import auto_clean_runner
-            return auto_clean_runner.run(mode="full" if full else "quick", quiet=True)
+            return auto_clean_runner.run(
+                mode="full" if full else "quick", quiet=True,
+                include_social=include_social)
         except Exception as e:
             # 无控制台环境下无法打印，写入日志文件便于排查
             try:

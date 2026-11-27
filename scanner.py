@@ -58,17 +58,53 @@ def format_size(size_bytes):
 
 
 class ScanResult:
-    """单项扫描结果"""
+    """单项扫描结果。
 
-    def __init__(self, category, source, path, size, description=""):
+    paths     : 真正需要清理的路径列表（A2：不再用分号拼接字符串当协议）
+    path      : 仅供界面展示的位置说明（可以是多个路径的摘要）
+    cleanable : False 表示"提示项"，只展示、永不自动删除
+    social    : 社交软件缓存，自动清理时需要额外的年龄阈值
+    """
+
+    def __init__(self, category, source, path, size, description="",
+                 paths=None, cleanable=True, social=False):
         self.category = category      # 大分类：系统垃圾/微信专清/QQ专清/隐私痕迹/大文件...
         self.source = source          # 垃圾来源备注：如"Windows临时目录"
-        self.path = path              # 文件/目录路径
+        self.path = path              # 展示用位置
+        self.paths = list(paths) if paths else ([path] if path else [])
         self.size = size              # 大小（字节）
         self.description = description  # 详细说明
+        self.cleanable = bool(cleanable)
+        self.social = bool(social)
 
     def __repr__(self):
         return f"<ScanResult {self.category}|{self.source}|{format_size(self.size)}>"
+
+
+# 是否把"已接收的文件/附件"（FileRecv、Attachment、FileStorage\File 等）纳入扫描。
+# 默认关闭：交互界面由勾选框控制，自动清理由 --include-social 控制。
+_INCLUDE_SOCIAL_FILES = False
+
+
+def set_social_include_files(flag):
+    """供界面/自动清理脚本设置：是否包含已接收文件与附件"""
+    global _INCLUDE_SOCIAL_FILES
+    _INCLUDE_SOCIAL_FILES = bool(flag)
+
+
+def get_social_include_files():
+    return _INCLUDE_SOCIAL_FILES
+
+
+def _display_paths(paths, limit=3):
+    """把路径列表压成一段展示文本，避免表格里塞进一长串分号路径"""
+    paths = [p for p in (paths or []) if p]
+    if not paths:
+        return ""
+    shown = "；".join(paths[:limit])
+    if len(paths) > limit:
+        shown += f" 等 {len(paths)} 项"
+    return shown
 
 
 class ScanEngine:
@@ -204,7 +240,8 @@ class ScanEngine:
             self.results.append(ScanResult(
                 category="系统垃圾",
                 source="Windows系统日志",
-                path="; ".join(paths),
+                path=_display_paths(paths),
+                paths=paths,
                 size=total,
                 description="系统安装日志、错误日志等，用于排查问题后可清理。"
             ))
@@ -226,7 +263,8 @@ class ScanEngine:
             self.results.append(ScanResult(
                 category="系统垃圾",
                 source="蓝屏内存转储文件",
-                path="; ".join(files_found),
+                path=_display_paths(files_found),
+                paths=files_found,
                 size=total,
                 description="系统崩溃(蓝屏)时生成的内存转储文件，用于诊断后可清理。"
             ))
@@ -266,89 +304,175 @@ class ScanEngine:
     # ==================== 微信专清 ====================
 
     def scan_wechat(self):
-        """扫描微信缓存"""
+        """扫描微信缓存（版本感知：3.x 旧目录 + 4.0 xwechat_files）"""
         self._emit(55, "正在扫描微信缓存...")
-        total = 0
-        items = []
+        user = os.environ.get('USERPROFILE', '')
+        appdata = os.environ.get('APPDATA', '')
+        include_files = _INCLUDE_SOCIAL_FILES
+        clean_items = []      # [(path, size)]
+        hint_items = []       # [(path, size)] 仅提示，不可清理
 
-        # 微信文件存储目录
-        doc_path = os.path.join(os.environ.get('USERPROFILE', ''), 'Documents', 'WeChat Files')
-        appdata_wechat = os.path.join(os.environ.get('APPDATA', ''), 'Tencent', 'WeChat')
-        if not os.path.exists(doc_path) and not os.path.exists(appdata_wechat):
-            self._emit(60, "未检测到微信，跳过微信专清")
-            return
-
-        if os.path.exists(doc_path):
-            for wx_id_dir in os.listdir(doc_path):
-                wx_dir = os.path.join(doc_path, wx_id_dir)
-                if not os.path.isdir(wx_dir):
+        # ---------- 微信 3.x：Documents\\WeChat Files\\<账号> ----------
+        legacy_root = os.path.join(user, 'Documents', 'WeChat Files')
+        if os.path.isdir(legacy_root):
+            for acc in os.listdir(legacy_root):
+                base = os.path.join(legacy_root, acc)
+                if not os.path.isdir(base):
                     continue
-                # 缓存子目录
-                for sub in ['Cache', 'FileStorage', 'Image', 'Video', 'Attachment']:
-                    sub_path = os.path.join(wx_dir, sub)
-                    if os.path.exists(sub_path):
-                        s = get_size(sub_path)
+                # 默认只清缓存与聊天图片/视频；FileStorage\File、Attachment 属于"已接收文件"
+                default_subs = [
+                    'Cache', 'Image', 'Video',
+                    os.path.join('FileStorage', 'Cache'),
+                    os.path.join('FileStorage', 'Image'),
+                    os.path.join('FileStorage', 'Video'),
+                ]
+                optin_subs = [
+                    'Attachment',
+                    os.path.join('FileStorage', 'File'),
+                    os.path.join('FileStorage', 'Attachment'),
+                ]
+                for sub in default_subs + (optin_subs if include_files else []):
+                    p = os.path.join(base, sub)
+                    if os.path.isdir(p):
+                        s = get_size(p)
                         if s > 0:
-                            total += s
-                            items.append((sub_path, s))
+                            clean_items.append((p, s))
 
-        # 微信AppData缓存
-        if os.path.exists(appdata_wechat):
-            s = get_size(appdata_wechat)
-            if s > 0:
-                total += s
-                items.append((appdata_wechat, s))
+        # ---------- 微信 4.0：Documents\\xwechat_files\\<账号> ----------
+        new_root = os.path.join(user, 'Documents', 'xwechat_files')
+        if os.path.isdir(new_root):
+            for acc in os.listdir(new_root):
+                base = os.path.join(new_root, acc)
+                if not os.path.isdir(base) or acc.lower() in ('all_users', 'applet'):
+                    continue
+                # 只处理看起来像账号根目录的文件夹
+                marks = ('msg', 'cache', 'image', 'video', 'attachment')
+                if not any(os.path.isdir(os.path.join(base, m)) for m in marks):
+                    continue
+                default_subs = ['cache', 'temp', 'image', 'video', 'log']
+                optin_subs = ['attachment', 'msg_attach', 'file']
+                for sub in default_subs + (optin_subs if include_files else []):
+                    p = os.path.join(base, sub)
+                    if os.path.isdir(p):
+                        s = get_size(p)
+                        if s > 0:
+                            clean_items.append((p, s))
 
-        if total > 0:
+        # ---------- AppData：登录态/配置，一律只提示 ----------
+        for rel in (('Tencent', 'WeChat'),
+                    ('Tencent', 'WeChatAppEx'),
+                    ('Tencent', 'xwechat')):
+            p = os.path.join(appdata, *rel)
+            if os.path.isdir(p):
+                s = get_size(p)
+                if s > 0:
+                    hint_items.append((p, s))
+
+        if clean_items:
+            total = sum(s for _, s in clean_items)
+            paths = [p for p, _ in clean_items]
             self.results.append(ScanResult(
                 category="微信专清",
-                source="微信聊天缓存/文件/图片/视频",
-                path="; ".join(p for p, _ in items[:5]),
+                source=("微信缓存/图片/视频 + 已接收文件" if include_files
+                        else "微信缓存/图片/视频（不含已接收文件）"),
+                path=_display_paths(paths),
+                paths=paths,
                 size=total,
-                description=f"微信产生的缓存、接收的文件、图片、视频等，共{len(items)}项。清理后聊天记录不丢失，但已下载的文件/图片需重新下载。"
+                social=True,
+                description=("默认清理缓存与聊天图片/视频，不碰消息数据库。"
+                             "已接收文件与附件需要勾选后才能清理。" if not include_files
+                             else "已包含已接收文件与附件；消息数据库仍不会被删除。"),
+            ))
+
+        for p, s in hint_items:
+            self.results.append(ScanResult(
+                category="提示项",
+                source="微信 AppData 配置目录（仅提示）",
+                path=p,
+                size=s,
+                cleanable=False,
+                description=("新版微信把登录态、配置与部分消息数据放在这里。"
+                             "整体删除会影响登录甚至丢消息，本工具只提示，不会自动清理。"),
             ))
 
     # ==================== QQ专清 ====================
 
     def scan_qq(self):
-        """扫描QQ缓存"""
+        """扫描 QQ 缓存（版本感知：经典目录 + QQ NT）"""
         self._emit(62, "正在扫描QQ缓存...")
-        total = 0
-        items = []
+        user = os.environ.get('USERPROFILE', '')
+        appdata = os.environ.get('APPDATA', '')
+        include_files = _INCLUDE_SOCIAL_FILES
+        clean_items = []
+        hint_items = []
 
-        doc_path = os.path.join(os.environ.get('USERPROFILE', ''), 'Documents', 'Tencent Files')
-        appdata_qq = os.path.join(os.environ.get('APPDATA', ''), 'Tencent', 'QQ')
-        if not os.path.exists(doc_path) and not os.path.exists(appdata_qq):
-            self._emit(66, "未检测到 QQ，跳过 QQ 专清")
-            return
-
-        if os.path.exists(doc_path):
-            for qq_dir in os.listdir(doc_path):
-                full = os.path.join(doc_path, qq_dir)
-                if not os.path.isdir(full):
+        legacy_root = os.path.join(user, 'Documents', 'Tencent Files')
+        if os.path.isdir(legacy_root):
+            for acc in os.listdir(legacy_root):
+                base = os.path.join(legacy_root, acc)
+                if not os.path.isdir(base):
                     continue
-                for sub in ['Image', 'FileRecv', 'Video', 'Photo']:
-                    sub_path = os.path.join(full, sub)
-                    if os.path.exists(sub_path):
-                        s = get_size(sub_path)
+                nt_root = os.path.join(base, 'nt_qq')
+                if os.path.isdir(nt_root):
+                    # QQ NT：只碰明确的缓存/媒体目录，绝不碰 nt_db 消息库
+                    scan_root = nt_root
+                    default_subs = [
+                        'nt_temp',
+                        os.path.join('nt_data', 'Log'),
+                        os.path.join('nt_data', 'Pic'),
+                        os.path.join('nt_data', 'Video'),
+                        os.path.join('nt_data', 'Avatar'),
+                    ]
+                    optin_subs = [
+                        os.path.join('nt_data', 'File'),
+                        os.path.join('nt_data', 'Emoji'),
+                    ]
+                else:
+                    # 经典 QQ：默认图片/视频/照片，FileRecv 属于"已接收文件"
+                    scan_root = base
+                    default_subs = ['Image', 'Video', 'Photo']
+                    optin_subs = ['FileRecv', 'Audio']
+                for sub in default_subs + (optin_subs if include_files else []):
+                    p = os.path.join(scan_root, sub)
+                    if os.path.isdir(p):
+                        s = get_size(p)
                         if s > 0:
-                            total += s
-                            items.append((sub_path, s))
+                            clean_items.append((p, s))
 
-        # QQ AppData 缓存
-        if os.path.exists(appdata_qq):
-            s = get_size(appdata_qq)
-            if s > 0:
-                total += s
-                items.append((appdata_qq, s))
+        # ---------- AppData：配置/登录态，只提示 ----------
+        for rel in (('Tencent', 'QQ'), ('Tencent', 'QQNT'), ('Tencent', 'QQProtect')):
+            p = os.path.join(appdata, *rel)
+            if os.path.isdir(p):
+                s = get_size(p)
+                if s > 0:
+                    hint_items.append((p, s))
 
-        if total > 0:
+        if clean_items:
+            total = sum(s for _, s in clean_items)
+            paths = [p for p, _ in clean_items]
             self.results.append(ScanResult(
                 category="QQ专清",
-                source="QQ聊天图片/文件/视频缓存",
-                path="; ".join(p for p, _ in items[:5]),
+                source=("QQ缓存/图片/视频 + 已接收文件" if include_files
+                        else "QQ缓存/图片/视频（不含已接收文件）"),
+                path=_display_paths(paths),
+                paths=paths,
                 size=total,
-                description=f"QQ接收的图片、文件、视频等缓存，共{len(items)}项。清理后不影响聊天记录。"
+                social=True,
+                description=("默认只清图片/视频/缓存，QQ NT 的 nt_db 消息库不会被触碰。"
+                             "FileRecv / nt_data\\File 等已接收文件需勾选后才能清理。"
+                             if not include_files else
+                             "已包含已接收文件；nt_db 消息库仍不会被删除。"),
+            ))
+
+        for p, s in hint_items:
+            self.results.append(ScanResult(
+                category="提示项",
+                source="QQ AppData 配置目录（仅提示）",
+                path=p,
+                size=s,
+                cleanable=False,
+                description=("QQ NT 的登录态、配置与部分数据放在这里。"
+                             "整体删除会影响登录，本工具只提示，不会自动清理。"),
             ))
 
     # ==================== 隐私清理 ====================
@@ -388,10 +512,12 @@ class ScanEngine:
                 items.append(("图标缓存", s, event_cache))
 
         if total > 0:
+            privacy_paths = [p for _, _, p in items]
             self.results.append(ScanResult(
                 category="隐私清理",
                 source="最近文档/剪贴板/图标缓存",
-                path="; ".join(p for _, _, p in items),
+                path=_display_paths(privacy_paths),
+                paths=privacy_paths,
                 size=total,
                 description="; ".join(f"{n}:{format_size(s)}" for n, s, _ in items) + "。清理后保护隐私，不影响系统运行。"
             ))
