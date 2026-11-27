@@ -17,8 +17,8 @@
 
 | 平台 | 文件 | 说明 |
 | --- | --- | --- |
-| Windows 10/11 | [HeShu-HS-Setup-2.0.1.exe](https://github.com/H-S-10086/heshu-hs/releases/download/v2.0.1/HeShu-HS-Setup-2.0.1.exe) | 电脑端安装包（内部已附带手机 APK） |
-| Android 7.0+ | [CleanMasterLink.apk](https://github.com/H-S-10086/heshu-hs/releases/download/v2.0.1/CleanMasterLink.apk) | 手机 App 1.8.2，覆盖安装即可 |
+| Windows 10/11 | [HeShu-HS-Setup-2.1.0.exe](https://github.com/H-S-10086/heshu-hs/releases/download/v2.1.0/HeShu-HS-Setup-2.1.0.exe) | 电脑端安装包（内部已附带手机 APK） |
+| Android 7.0+ | [CleanMasterLink.apk](https://github.com/H-S-10086/heshu-hs/releases/download/v2.1.0/CleanMasterLink.apk) | 手机 App 1.8.2，覆盖安装即可 |
 
 安装步骤：
 
@@ -28,7 +28,7 @@
 
 SHA-256 校验值：
 
-- `HeShu-HS-Setup-2.0.1.exe`：`c02a038b4fae11efb25705055f2a6cd390874392e949b18462873a88d6ea322c`
+- `HeShu-HS-Setup-2.1.0.exe`：`47ab4edcb768c5fb60b51631e2292ce130aa6a722dab58f17b8a3aca2f108413`
 - `CleanMasterLink.apk`：`4cd44f56af416858a2f83a8e465678eca1290845cc2c027d5e83b944e5ca1d71`
 
 ---
