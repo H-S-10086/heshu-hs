@@ -124,6 +124,29 @@ class LinkPage:
         self.disc_table.pack(fill=tk.X, padx=16, pady=(0, 10))
         self.disc_tree.bind("<Double-1>", lambda _e: self._request_connect())
 
+        # ============ 已配对设备（token 管理） ============
+        self._paired_sig = None
+        paired_card = self.app.card(self.parent, pady=(0, 8))
+        paired_head = tk.Frame(paired_card, bg=T.CARD_BG)
+        paired_head.pack(fill=tk.X, padx=16, pady=(10, 4))
+
+        tk.Label(paired_head, text="🔐 已配对设备", bg=T.CARD_BG, fg=T.TEXT,
+                 font=("Microsoft YaHei", 10, "bold")).pack(side=tk.LEFT)
+        self.paired_hint = tk.Label(
+            paired_head, text="配对凭据 30 天有效，移除后需重新同意",
+            bg=T.CARD_BG, fg=T.TEXT_LIGHT, font=("Microsoft YaHei", 9))
+        self.paired_hint.pack(side=tk.LEFT, padx=10)
+
+        self.app.button(paired_head, "移除选中", self._revoke_paired_selected,
+                        kind="ghost").pack(side=tk.RIGHT)
+        self.app.button(paired_head, "全部移除", self._revoke_all_paired,
+                        kind="ghost").pack(side=tk.RIGHT, padx=8)
+
+        self.paired_tree, self.paired_table = self.app.make_table(
+            paired_card, ("device", "paired", "expire"), (200, 150, 120),
+            headings=("设备", "配对时间", "有效期"), height=3)
+        self.paired_table.pack(fill=tk.X, padx=16, pady=(0, 10))
+
         # 剪贴板同步卡片
         clip_card = self.app.card(self.parent, pady=(0, 8))
         clip_inner = tk.Frame(clip_card, bg=T.CARD_BG)
@@ -226,6 +249,7 @@ class LinkPage:
         self._schedule_refresh()
         self._sync_ui()
         self._refresh_discoverable()
+        self._refresh_paired()
         return self
 
     # ==================== 服务控制 ====================
@@ -371,6 +395,65 @@ class LinkPage:
             self.app.show_warning("无法连接", msg)
             return
         self.disc_hint.config(text=msg)
+        self._sync_ui()
+
+    # ==================== 已配对设备（token 管理） ====================
+
+    def _refresh_paired(self):
+        """刷新已配对设备表（token 每 30 天过期，可手动移除）"""
+        link = self.link
+        if link is None:
+            return
+        try:
+            items = link.pairing.paired_devices()
+        except Exception:
+            items = []
+        sig = tuple((d.get("id"), d.get("device"), int(d.get("expires_at") or 0))
+                    for d in items)
+        if sig == self._paired_sig:
+            return
+        self._paired_sig = sig
+        for row in self.paired_tree.get_children():
+            self.paired_tree.delete(row)
+        for d in items:
+            days = int(d.get("remain_days") or 0)
+            expire = ("剩余 %d 天" % days) if days > 0 else "今日到期"
+            self.paired_tree.insert("", tk.END, iid=str(d.get("id")),
+                                    values=(d.get("device", "") or "未知设备",
+                                            d.get("paired_at", ""), expire))
+        if items:
+            self.paired_hint.config(text="配对凭据 30 天有效，移除后需重新同意")
+        else:
+            self.paired_hint.config(text="暂无已配对设备")
+
+    def _revoke_paired_selected(self):
+        link = self._ensure_link()
+        if link is None:
+            return
+        sel = self.paired_tree.selection()
+        if not sel:
+            self.app.show_warning("提示", "请先在「已配对设备」里选择一条记录")
+            return
+        if not self.app.ask_yes_no(
+                "移除配对设备",
+                "移除后该设备需要重新请求连接并得到允许，才能再次收发消息。\n\n确定移除吗？"):
+            return
+        ok, msg = link.revoke_paired(sel[0])
+        self.app.set_status(msg)
+        self._refresh_paired()
+        self._sync_ui()
+
+    def _revoke_all_paired(self):
+        link = self._ensure_link()
+        if link is None:
+            return
+        if not self.app.ask_yes_no(
+                "移除全部配对设备",
+                "所有手机都会被断开，并且需要重新连接、重新同意。\n\n确定继续吗？"):
+            return
+        ok, msg = link.revoke_all_paired()
+        self.app.set_status(msg)
+        self._refresh_paired()
         self._sync_ui()
 
     def _poll_connect_requests(self):
@@ -630,6 +713,7 @@ class LinkPage:
             self._refresh_lists()
             self._sync_ui()
             self._refresh_discoverable()
+            self._refresh_paired()
             self._poll_connect_requests()
             self._refresh_mic_status()
         except Exception:

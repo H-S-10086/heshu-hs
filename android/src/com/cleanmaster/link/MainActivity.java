@@ -103,6 +103,7 @@ public class MainActivity extends Activity
 
     private ScrollView page;
     private TextView tvNewBanner;
+    private TextView tvMicBanner;
     private TextView tvStatus;
     private TextView tvPcName;
     private TextView tvAddr;
@@ -395,6 +396,20 @@ public class MainActivity extends Activity
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         bannerLp.bottomMargin = dp(10);
         root.addView(tvNewBanner, bannerLp);
+
+        // ---- 麦克风录音提示条（常驻，防止用户不知道正在采音） ----
+        tvMicBanner = new TextView(this);
+        tvMicBanner.setText("● 麦克风正在录音 · 声音实时发送到电脑");
+        tvMicBanner.setTextSize(13);
+        tvMicBanner.setTextColor(0xFFFFFFFF);
+        tvMicBanner.setGravity(Gravity.CENTER_VERTICAL);
+        tvMicBanner.setPadding(dp(12), dp(9), dp(12), dp(9));
+        tvMicBanner.setBackground(roundBg(COLOR_ERR));
+        tvMicBanner.setVisibility(View.GONE);
+        LinearLayout.LayoutParams micBannerLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        micBannerLp.bottomMargin = dp(10);
+        root.addView(tvMicBanner, micBannerLp);
 
         // ---- 连接卡片 ----
         LinearLayout connCard = card();
@@ -1028,6 +1043,12 @@ public class MainActivity extends Activity
         } else {
             tvStatus.setText("状态：未连接");
             tvStatus.setTextColor(COLOR_SUB);
+        }
+
+        // 麦克风录音时顶部常驻红色提示条，避免用户不知道正在采音
+        if (tvMicBanner != null) {
+            tvMicBanner.setVisibility(LinkService.isMicActive()
+                    ? View.VISIBLE : View.GONE);
         }
 
         String pc = LinkService.getServerName();

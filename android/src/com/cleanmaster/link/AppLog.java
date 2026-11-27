@@ -72,15 +72,18 @@ public final class AppLog {
         }
     }
 
-    /** 把可能很长的文本压成一行，便于日志展示 */
+    /**
+     * 把可能很长的文本压成一行，便于日志展示。
+     * 只保留首尾各 8 个字符，避免剪贴板 / 通知正文 / 验证码整段留在日志里。
+     */
     public static String preview(String text) {
         if (text == null) {
             return "";
         }
         String s = text.replace("\r", " ").replace("\n", " ").trim();
-        if (s.length() > 60) {
-            s = s.substring(0, 60) + "…";
+        if (s.length() <= 16) {
+            return s;
         }
-        return s;
+        return s.substring(0, 8) + "…" + s.substring(s.length() - 8);
     }
 }

@@ -42,10 +42,14 @@ public final class HttpApi {
     private HttpApi() {
     }
 
-    /** 所有请求统一加 App 标识（没 token 时电脑端会回 401） */
+    /** 所有请求统一加 App 标识与 token（不再把 token 拼进 URL） */
     private static void applyHeaders(HttpURLConnection conn) {
         conn.setRequestProperty("X-Client", "app");
         conn.setRequestProperty("User-Agent", USER_AGENT);
+        String t = sToken;
+        if (t != null && !t.isEmpty()) {
+            conn.setRequestProperty("X-Transfer-Token", t);
+        }
     }
 
     public interface Progress {
@@ -165,23 +169,10 @@ public final class HttpApi {
         sToken = token == null ? "" : token;
     }
 
-    private static String withToken(String url) {
-        String t = sToken;
-        if (t == null || t.isEmpty()) {
-            return url;
-        }
-        try {
-            String sep = url.indexOf('?') >= 0 ? "&" : "?";
-            return url + sep + "token=" + URLEncoder.encode(t, "UTF-8");
-        } catch (Exception e) {
-            return url;
-        }
-    }
-
     public static List<FileItem> listFiles(String ip, int port) throws IOException {
         List<FileItem> out = new ArrayList<>();
         HttpURLConnection conn = (HttpURLConnection) new URL(
-                withToken("http://" + ip + ":" + port + "/api/files")).openConnection();
+                "http://" + ip + ":" + port + "/api/files").openConnection();
         try {
             conn.setConnectTimeout(CONNECT_TIMEOUT);
             conn.setReadTimeout(READ_TIMEOUT);
@@ -232,7 +223,7 @@ public final class HttpApi {
     public static List<MsgItem> listMessages(String ip, int port) throws IOException {
         List<MsgItem> out = new ArrayList<>();
         HttpURLConnection conn = (HttpURLConnection) new URL(
-                withToken("http://" + ip + ":" + port + "/api/messages")).openConnection();
+                "http://" + ip + ":" + port + "/api/messages").openConnection();
         try {
             conn.setConnectTimeout(CONNECT_TIMEOUT);
             conn.setReadTimeout(READ_TIMEOUT);
@@ -292,7 +283,10 @@ public final class HttpApi {
      */
     public static boolean sendText(String ip, int port, String token, String text)
             throws IOException {
-        String url = "http://" + ip + ":" + port + "/api/text" + tokenQuery(token);
+        if (token != null && !token.isEmpty()) {
+            sToken = token;           // 兼容旧调用：token 只走请求头
+        }
+        String url = "http://" + ip + ":" + port + "/api/text";
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         try {
             conn.setConnectTimeout(CONNECT_TIMEOUT);
@@ -331,14 +325,6 @@ public final class HttpApi {
         }
     }
 
-    /** 根据 token 拼接查询串（配对过的电脑用 token 免 PIN） */
-    private static String tokenQuery(String token) throws IOException {
-        if (token == null || token.isEmpty()) {
-            return "";
-        }
-        return "?token=" + URLEncoder.encode(token, "UTF-8");
-    }
-
     // ==================== 文本预览 ====================
 
     /**
@@ -347,8 +333,8 @@ public final class HttpApi {
      */
     public static PreviewResult preview(String ip, int port, String name) throws IOException {
         PreviewResult res = new PreviewResult();
-        String url = withToken("http://" + ip + ":" + port + "/api/preview?name="
-                + URLEncoder.encode(name == null ? "" : name, "UTF-8"));
+        String url = "http://" + ip + ":" + port + "/api/preview?name="
+                + URLEncoder.encode(name == null ? "" : name, "UTF-8");
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         try {
             conn.setConnectTimeout(CONNECT_TIMEOUT);
@@ -381,7 +367,7 @@ public final class HttpApi {
      */
     public static File downloadToCache(Context context, String ip, int port, String name)
             throws IOException {
-        String url = withToken("http://" + ip + ":" + port + "/download/" + encodePath(name));
+        String url = "http://" + ip + ":" + port + "/download/" + encodePath(name);
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         try {
             conn.setConnectTimeout(CONNECT_TIMEOUT);
@@ -480,7 +466,7 @@ public final class HttpApi {
             }
 
             HttpURLConnection conn = (HttpURLConnection) new URL(
-                    withToken("http://" + ip + ":" + port + "/api/upload")).openConnection();
+                    "http://" + ip + ":" + port + "/api/upload").openConnection();
             try {
                 conn.setConnectTimeout(CONNECT_TIMEOUT);
                 conn.setReadTimeout(60000);
@@ -583,7 +569,7 @@ public final class HttpApi {
      */
     public static String download(Context context, String ip, int port, String name)
             throws IOException {
-        String url = withToken("http://" + ip + ":" + port + "/download/" + encodePath(name));
+        String url = "http://" + ip + ":" + port + "/download/" + encodePath(name);
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         try {
             conn.setConnectTimeout(CONNECT_TIMEOUT);

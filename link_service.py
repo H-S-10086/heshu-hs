@@ -51,6 +51,8 @@ PROTOCOL_VERSION = 1
 PHONE_TTL = 12.0
 # 连接请求等待对方确认的时长
 CONNECT_REQ_TTL = 60.0
+# 配对 token 有效期（天）。到期后必须重新配对 / 在电脑上同意。
+TOKEN_TTL_DAYS = 30
 
 # 剪贴板轮询间隔（毫秒）。太快费 CPU，太慢手感差，500ms 比较平衡。
 CLIPBOARD_POLL_MS = 500
@@ -277,7 +279,22 @@ class PairingManager:
             with open(self.state_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                self.tokens = data.get("tokens", {}) or {}
+                raw = data.get("tokens", {}) or {}
+                # 旧版本 token 没有过期时间：按"已过期"处理，强制重新配对。
+                now = time.time()
+                kept = {}
+                for tok, info in raw.items():
+                    if not isinstance(info, dict):
+                        continue
+                    try:
+                        exp = float(info.get("expires_at") or 0)
+                    except Exception:
+                        exp = 0
+                    if exp > now:
+                        kept[tok] = info
+                self.tokens = kept
+                if len(kept) != len(raw):
+                    self._save()
         except Exception:
             self.tokens = {}
 
@@ -297,9 +314,11 @@ class PairingManager:
             if not code or str(code).strip() != self.code:
                 return None
             token = secrets.token_hex(16)
+            now = time.time()
             self.tokens[token] = {
                 "device": device,
                 "paired_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "expires_at": now + TOKEN_TTL_DAYS * 86400,
             }
             # 配对成功后立即换新码，防止被重复利用
             self.code = self._new_code()
@@ -310,9 +329,11 @@ class PairingManager:
         """设备连线请求被同意后，直接签发一个 token（不需要输入访问码）"""
         with self._lock:
             token = secrets.token_hex(16)
+            now = time.time()
             self.tokens[token] = {
                 "device": device,
                 "paired_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "expires_at": now + TOKEN_TTL_DAYS * 86400,
             }
             self._save()
             return token
@@ -320,8 +341,21 @@ class PairingManager:
     def check_token(self, token):
         if not token:
             return False
+        now = time.time()
         with self._lock:
-            return token in self.tokens
+            info = self.tokens.get(token)
+            if not info:
+                return False
+            try:
+                exp = float(info.get("expires_at") or 0)
+            except Exception:
+                exp = 0
+            if exp <= now:
+                # 过期即删除，避免长期驻留
+                del self.tokens[token]
+                self._save()
+                return False
+            return True
 
     def device_of(self, token):
         with self._lock:
@@ -341,11 +375,40 @@ class PairingManager:
             self.tokens.clear()
             self._save()
 
-    def paired_devices(self):
+    def revoke_by_prefix(self, token_id):
+        """
+        按界面上展示的 8 位前缀移除一条配对记录，返回完整 token（用于踢掉在线连接）。
+        前缀太短直接拒绝，避免误删。
+        """
+        token_id = (token_id or "").strip()
+        if len(token_id) < 6:
+            return ""
         with self._lock:
-            return [{"token": k[:8] + "…", "device": v.get("device", ""),
-                     "paired_at": v.get("paired_at", "")}
-                    for k, v in self.tokens.items()]
+            for tok in list(self.tokens.keys()):
+                if tok.startswith(token_id):
+                    del self.tokens[tok]
+                    self._save()
+                    return tok
+        return ""
+
+    def paired_devices(self):
+        now = time.time()
+        with self._lock:
+            out = []
+            for k, v in self.tokens.items():
+                try:
+                    exp = float(v.get("expires_at") or 0)
+                except Exception:
+                    exp = 0
+                out.append({
+                    "id": k[:8],
+                    "device": v.get("device", ""),
+                    "paired_at": v.get("paired_at", ""),
+                    "expires_at": exp,
+                    "remain_days": max(0, int((exp - now) // 86400)),
+                })
+            out.sort(key=lambda x: x.get("paired_at", ""), reverse=True)
+            return out
 
 
 # ==================== 协同服务主类 ====================
@@ -723,6 +786,21 @@ class LinkService:
                 time.sleep(5)
                 now = time.time()
                 for sid, s in self.hub.all():
+                    # token 过期 / 被移除：立刻踢下线，避免长连接绕过有效期
+                    tok = s.meta.get("token") or ""
+                    if tok and not self.pairing.check_token(tok):
+                        try:
+                            s.send_json({"type": "kick",
+                                         "message": "连接凭据已过期，请重新连接"})
+                            s.close(4001, "token expired")
+                        except Exception:
+                            pass
+                        self.hub.remove(sid)
+                        self.connected_clients = [
+                            c for c in self.connected_clients
+                            if c.get("sid") != sid]
+                        self._notify("disconnected", s.meta.get("device") or "设备")
+                        continue
                     idle = now - getattr(s, "last_active", now)
                     if idle > 50:
                         try:
@@ -1125,6 +1203,23 @@ class LinkService:
             self._notify("disconnected", "已断开")
             return True
         return False
+
+    def revoke_paired(self, token_id):
+        """从「已配对设备」里移除一条，并踢掉使用该 token 的在线连接"""
+        token = self.pairing.revoke_by_prefix(token_id)
+        if not token:
+            return False, "该配对记录已不存在"
+        for sid, s in list(self.hub.all()):
+            if s.meta.get("token") == token:
+                self.kick_session(sid)
+        return True, "已移除该设备"
+
+    def revoke_all_paired(self):
+        """移除全部配对设备，并断开所有在线连接"""
+        self.pairing.revoke_all()
+        for sid, _s in list(self.hub.all()):
+            self.kick_session(sid)
+        return True, "已移除全部配对设备"
 
     # ---------- 状态 ----------
 

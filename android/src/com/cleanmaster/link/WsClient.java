@@ -48,6 +48,7 @@ public class WsClient {
     private final String host;
     private final int port;
     private final String path;
+    private final String token;
     private final Listener listener;
     private final SecureRandom random = new SecureRandom();
     private final Object writeLock = new Object();
@@ -58,9 +59,14 @@ public class WsClient {
     private volatile boolean closed = false;
 
     public WsClient(String host, int port, String path, Listener listener) {
+        this(host, port, path, "", listener);
+    }
+
+    public WsClient(String host, int port, String path, String token, Listener listener) {
         this.host = host;
         this.port = port;
         this.path = (path == null || path.isEmpty()) ? "/ws" : path;
+        this.token = token == null ? "" : token;
         this.listener = listener;
     }
 
@@ -88,6 +94,7 @@ public class WsClient {
                 + "Connection: Upgrade\r\n"
                 + "Sec-WebSocket-Key: " + key + "\r\n"
                 + "Sec-WebSocket-Version: 13\r\n"
+                + (token.isEmpty() ? "" : "X-Transfer-Token: " + token + "\r\n")
                 + "\r\n";
         out.write(request.getBytes("UTF-8"));
         out.flush();

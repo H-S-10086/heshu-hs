@@ -17,8 +17,8 @@
 
 | 平台 | 文件 | 说明 |
 | --- | --- | --- |
-| Windows 10/11 | [HeShu-HS-Setup-2.0.0.exe](https://github.com/H-S-10086/heshu-hs/releases/download/v2.0.0/HeShu-HS-Setup-2.0.0.exe) | 电脑端安装包（内部已附带手机 APK） |
-| Android 7.0+ | [CleanMasterLink.apk](https://github.com/H-S-10086/heshu-hs/releases/download/v2.0.0/CleanMasterLink.apk) | 手机 App，覆盖安装即可 |
+| Windows 10/11 | [HeShu-HS-Setup-2.0.1.exe](https://github.com/H-S-10086/heshu-hs/releases/download/v2.0.1/HeShu-HS-Setup-2.0.1.exe) | 电脑端安装包（内部已附带手机 APK） |
+| Android 7.0+ | [CleanMasterLink.apk](https://github.com/H-S-10086/heshu-hs/releases/download/v2.0.1/CleanMasterLink.apk) | 手机 App 1.8.2，覆盖安装即可 |
 
 安装步骤：
 
@@ -28,8 +28,8 @@
 
 SHA-256 校验值：
 
-- `HeShu-HS-Setup-2.0.0.exe`：`4a9aa71702661bc48330d7c823fc240eaf254c998c1617adf355f263342d6d6a`
-- `CleanMasterLink.apk`：`0830ae64418e16602740090fcdbb0daede7075a4741b8c521b7c95b29298a640`
+- `HeShu-HS-Setup-2.0.1.exe`：`c02a038b4fae11efb25705055f2a6cd390874392e949b18462873a88d6ea322c`
+- `CleanMasterLink.apk`：`4cd44f56af416858a2f83a8e465678eca1290845cc2c027d5e83b944e5ca1d71`
 
 ---
 
@@ -165,9 +165,11 @@ python android/build_apk.py --clean
 ## 安全设计
 
 - 默认只允许局域网访问，跨网络访问需要显式开启并设置数字访问码。
-- App 请求必须携带有效 token；断开 / 被断开时 token 立即吊销。
+- App 请求必须携带有效 token（走 `X-Transfer-Token` 请求头，不出现在 URL）；token 30 天过期。
+- 电脑端「已配对设备」可查看并移除配对记录，移除后立即踢掉在线连接。
+- 断开 / 被断开时 token 立即吊销；Android 关闭 `allowBackup`，避免备份导出凭据。
 - 上传文件名做安全清洗，杜绝路径穿越；上传大小可配置上限。
-- 手机麦克风只做实时传输，不落盘。
+- 手机麦克风只做实时传输，不落盘；录音期间有常驻红色提示与通知。
 - 不依赖任何云端中转，数据只在设备之间直接传输。
 
 ## 参与贡献

@@ -441,16 +441,9 @@ public class LinkService extends Service {
                 token = "";
             }
 
-            // 电脑端在 WebSocket 握手时校验 token（?token=xxx）。
-            // 早期版本把 token 只放在 hello 消息里，会在握手阶段就被 403 拒绝 —— 这里必须带上。
-            String wsPath;
-            try {
-                wsPath = "/ws?token=" + java.net.URLEncoder.encode(
-                        token == null ? "" : token, "UTF-8");
-            } catch (Exception ue) {
-                wsPath = "/ws";
-            }
-            WsClient c = new WsClient(ip, port, wsPath, new WsListener());
+            // token 放请求头（不再拼进 URL，避免出现在日志/代理历史里）。
+            // 电脑端在 WebSocket 握手阶段校验 X-Transfer-Token。
+            WsClient c = new WsClient(ip, port, "/ws", token, new WsListener());
             client = c;
             setState(STATE_CONNECTING, attempt, 0);
 
@@ -476,10 +469,12 @@ public class LinkService extends Service {
                 // 这时不能傻等重连，要清掉本地 token 并让界面弹出配对框。
                 if (raw != null && raw.contains("403")) {
                     Prefs.setToken(this, "");
+                    HttpApi.setToken("");
                     authFailed = true;
-                    sLastError = "需要配对（403）";
+                    sLastError = "配对已失效，请重新连接";
                     sState = STATE_IDLE;
-                    AppLog.add("需要配对：请在电脑上查看访问码后输入");
+                    AppLog.add("配对已失效：请重新搜索设备并请求连接；"
+                            + "不同网络时手动输入电脑上的配对码");
                     broadcastNeedPair();
                 } else if (!authFailed) {
                     failStreak++;
@@ -752,11 +747,13 @@ public class LinkService extends Service {
                 sMicMessage = o.optString("message", "");
                 AppLog.add("麦克风：" + (sMicAckOk ? "电脑端已开始接收" : "电脑端拒绝")
                         + (sMicMessage.isEmpty() ? "" : "（" + sMicMessage + "）"));
+                updateNotification(lastNotifText);
                 broadcastState();
             } else if ("mic_stopped".equals(type)) {
                 sMicActive = false;
                 sMicMessage = o.optString("message", "");
                 AppLog.add("麦克风已停止：" + (sMicMessage.isEmpty() ? "电脑端已保存" : sMicMessage));
+                updateNotification(lastNotifText);
                 broadcastState();
             } else if ("error".equals(type)) {
                 String err = o.optString("error", o.optString("message", "未知错误"));
@@ -947,6 +944,13 @@ public class LinkService extends Service {
     }
 
     private Notification buildNotification(String text) {
+        return buildNotification(text, sMicActive);
+    }
+
+    /**
+     * 麦克风录制期间用红色标题 + 明确文案，让用户随时知道正在采音。
+     */
+    private Notification buildNotification(String text, boolean micActive) {
         Intent launch = new Intent(this, MainActivity.class);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= 23) {
@@ -961,11 +965,14 @@ public class LinkService extends Service {
             b = new Notification.Builder(this);
         }
         b.setSmallIcon(android.R.drawable.stat_notify_sync)
-                .setContentTitle("手机互传")
-                .setContentText(text)
+                .setContentTitle(micActive ? "手机互传 · 麦克风正在使用" : "手机互传")
+                .setContentText(micActive ? "正在录音并实时发送到电脑，点此返回停止" : text)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setContentIntent(pi);
+        if (Build.VERSION.SDK_INT >= 21) {
+            b.setColor(micActive ? 0xFFFF4D4F : 0xFF1890FF);
+        }
         return b.build();
     }
 
@@ -979,11 +986,12 @@ public class LinkService extends Service {
     }
 
     private void updateNotification(String text) {
+        lastNotifText = text == null ? "" : text;
         try {
             NotificationManager nm =
                     (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             if (nm != null) {
-                nm.notify(NOTIF_ID, buildNotification(text));
+                nm.notify(NOTIF_ID, buildNotification(lastNotifText));
             }
         } catch (Exception ignored) {
         }
