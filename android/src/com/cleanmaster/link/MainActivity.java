@@ -467,6 +467,14 @@ public class MainActivity extends Activity
 
         root.addView(row1);
 
+        // ---- 连接方式（无 Wi-Fi 时的兜底） ----
+        Button btnTransport = button("连接方式（USB / 热点 / 蓝牙）");
+        btnTransport.setOnClickListener(this);
+        LinearLayout.LayoutParams trLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        trLp.bottomMargin = dp(10);
+        root.addView(btnTransport, trLp);
+
         // ---- 配对卡片 ----
         pairBox = card();
         pairBox.setVisibility(View.GONE);
@@ -700,6 +708,8 @@ public class MainActivity extends Activity
                 showFullEditor();
             } else if ("后台保活设置".equals(s)) {
                 showKeepAliveDialog();
+            } else if ("连接方式（USB / 热点 / 蓝牙）".equals(s)) {
+                showTransportDialog();
             }
         }
     }
@@ -1363,6 +1373,53 @@ public class MainActivity extends Activity
                 refreshState();
             }
         }, 600);
+    }
+
+    private void showTransportDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("选择连接方式")
+                .setItems(new String[]{"Wi-Fi（自动发现）", "USB 网络共享", "手机热点", "蓝牙 PAN"},
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface d, int which) {
+                                if (which == 0) {
+                                    doDiscover();
+                                } else if (which == 1) {
+                                    openSettingsActions(new String[]{
+                                            "android.settings.TETHER_SETTINGS",
+                                            Settings.ACTION_WIRELESS_SETTINGS});
+                                    toast("开启 USB 网络共享后，回到 App 点「自动发现」");
+                                } else if (which == 2) {
+                                    openSettingsActions(new String[]{
+                                            "android.settings.TETHER_SETTINGS",
+                                            Settings.ACTION_WIRELESS_SETTINGS});
+                                    toast("开启热点并让电脑连上后，回到 App 点「自动发现」");
+                                } else {
+                                    openSettingsActions(new String[]{
+                                            Settings.ACTION_BLUETOOTH_SETTINGS,
+                                            "android.settings.TETHER_SETTINGS"});
+                                    toast("蓝牙配对后开启蓝牙网络共享，电脑加入个人区域网");
+                                }
+                            }
+                        })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void openSettingsActions(String[] actions) {
+        for (String action : actions) {
+            try {
+                Intent i = new Intent(action);
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                return;
+            } catch (Exception ignored) {
+            }
+        }
+        try {
+            startActivity(new Intent(Settings.ACTION_SETTINGS));
+        } catch (Exception ignored) {
+        }
     }
 
     private void showKeepAliveDialog() {
@@ -2701,6 +2758,41 @@ public class MainActivity extends Activity
     private void handleLaunchIntent(Intent intent) {
         if (intent == null) {
             return;
+        }
+        // 电脑端二维码深链：cmlink://pair?ip=...&port=...&code=...&name=...
+        try {
+            Uri data = intent.getData();
+            if (data != null && "cmlink".equals(data.getScheme())
+                    && "pair".equals(data.getHost())) {
+                String ip = data.getQueryParameter("ip");
+                String port = data.getQueryParameter("port");
+                String code = data.getQueryParameter("code");
+                String name = data.getQueryParameter("name");
+                if (ip != null && !ip.isEmpty() && code != null && !code.isEmpty()) {
+                    Prefs.setIp(this, ip);
+                    try {
+                        if (port != null && !port.isEmpty()) {
+                            Prefs.setPort(this, Integer.parseInt(port));
+                        }
+                    } catch (Exception ignored) {
+                    }
+                    Prefs.setPcName(this, name == null ? "" : name);
+                    Prefs.setNeedPair(this, true);
+                    Prefs.setToken(this, "");
+                    HttpApi.setToken("");
+                    if (etCode != null) {
+                        etCode.setText(code);
+                    }
+                    if (pairBox != null) {
+                        pairBox.setVisibility(View.VISIBLE);
+                    }
+                    AppLog.add("扫码配对：" + ip + ":" + Prefs.getPort(this));
+                    refreshState();
+                    doPair();
+                }
+                return;
+            }
+        } catch (Exception ignored) {
         }
         try {
             if (intent.getBooleanExtra(EXTRA_OPEN_FILES, false)) {

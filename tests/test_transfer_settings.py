@@ -3,6 +3,7 @@
 import os
 import tempfile
 import unittest
+import urllib.parse
 
 from file_transfer import TransferEngine
 
@@ -28,6 +29,19 @@ class TransferSettingsTest(unittest.TestCase):
                     os.environ.pop("USERPROFILE", None)
                 else:
                     os.environ["USERPROFILE"] = old
+
+
+class PairDeeplinkTest(unittest.TestCase):
+    def test_pair_deeplink_fields(self):
+        from page_transfer import TransferPage
+        url = TransferPage._pair_deeplink(
+            "192.168.1.5", 8080, "123456", "测试电脑")
+        self.assertTrue(url.startswith("cmlink://pair?"), url)
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        self.assertEqual(query["ip"][0], "192.168.1.5")
+        self.assertEqual(query["port"][0], "8080")
+        self.assertEqual(query["code"][0], "123456")
+        self.assertEqual(query["name"][0], "测试电脑")
 
 
 if __name__ == "__main__":

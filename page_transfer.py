@@ -14,9 +14,10 @@ import struct
 import ctypes
 import threading
 import urllib.request
+import urllib.parse
 import tkinter as tk
 from ctypes import wintypes
-from tkinter import filedialog
+from tkinter import filedialog, ttk
 
 from file_transfer import TransferEngine, get_local_ips, safe_filename
 from upnp_nat import map_port, unmap_port, UpnpError
@@ -216,6 +217,14 @@ class TransferPage:
         self.app.button(btn_row, "📂 打开接收目录", self.open_folder, kind="ghost").pack(
             side=tk.LEFT)
 
+        # App 扫码配对 / 多网卡地址（USB 网络共享、热点、蓝牙 PAN）
+        app_row = tk.Frame(right, bg=T.CARD_BG)
+        app_row.pack(fill=tk.X, pady=(0, 8))
+        self.app.button(app_row, "📱 App 扫码配对", self.show_app_pair_qr,
+                        kind="ghost").pack(side=tk.LEFT)
+        self.app.button(app_row, "🌐 所有地址", self.show_addresses,
+                        kind="ghost").pack(side=tk.LEFT, padx=8)
+
         # 设置区
         set_row = tk.Frame(right, bg=T.CARD_BG)
         set_row.pack(fill=tk.X, pady=(4, 0))
@@ -328,6 +337,128 @@ class TransferPage:
             self._refresh_job = None
 
     # ==================== 二维码绘制 ====================
+
+    def _render_qr_to(self, canvas, text, size=240):
+        """把任意文本画成二维码（App 扫码配对弹窗用）"""
+        canvas.delete("all")
+        try:
+            import qrcode_gen
+            matrix = qrcode_gen.make_qr_matrix(text, ecc="M", border=2)
+        except Exception:
+            matrix = None
+        if not matrix:
+            canvas.create_rectangle(0, 0, size, size, fill="#fafafa", outline="")
+            canvas.create_text(size / 2, size / 2, text="二维码生成失败",
+                               fill="#faad14", font=("Microsoft YaHei", 10))
+            return
+        n = len(matrix)
+        margin = 8
+        cell = (size - margin * 2) / float(n)
+        canvas.create_rectangle(0, 0, size, size, fill="#ffffff", outline="")
+        for r in range(n):
+            row = matrix[r]
+            for c in range(n):
+                if row[c]:
+                    x0 = margin + c * cell
+                    y0 = margin + r * cell
+                    canvas.create_rectangle(x0, y0, x0 + cell + 0.5,
+                                            y0 + cell + 0.5,
+                                            fill="#000000", outline="")
+
+    @staticmethod
+    def _pair_deeplink(ip, port, code, name):
+        query = urllib.parse.urlencode({
+            "ip": ip, "port": int(port), "code": str(code), "name": name or "",
+        })
+        return "cmlink://pair?" + query
+
+    def show_app_pair_qr(self):
+        """显示 App 深链配对二维码，支持多网卡地址切换"""
+        link = self._try_link()
+        if link is None or not link.is_running() or not self.engine.is_running():
+            self.app.show_warning("提示", "请先开启服务，再让手机扫码配对")
+            return
+        ips = get_local_ips()
+        if not ips:
+            self.app.show_warning("提示", "未获取到本机局域网地址，请检查网络连接")
+            return
+
+        T = self.app.THEME
+        port = self._listen_port()
+        code = link.get_pair_code()
+        name = socket.gethostname() or "电脑"
+
+        win = tk.Toplevel(self.app.root)
+        win.title("App 扫码配对")
+        win.configure(bg=T.CARD_BG)
+        win.transient(self.app.root)
+        win.resizable(False, False)
+
+        tk.Label(win, text="选择手机能访问的电脑地址：", bg=T.CARD_BG, fg=T.TEXT,
+                 font=("Microsoft YaHei", 10)).pack(anchor=tk.W, padx=16, pady=(14, 4))
+        ip_var = tk.StringVar(value=ips[0])
+        combo = ttk.Combobox(win, textvariable=ip_var, values=ips, state="readonly",
+                             width=32, font=("Consolas", 10))
+        combo.pack(anchor=tk.W, padx=16, pady=(0, 8))
+
+        canvas = tk.Canvas(win, width=260, height=260, bg="#ffffff",
+                           highlightthickness=1, highlightbackground=T.BORDER)
+        canvas.pack(padx=16, pady=(4, 8))
+
+        info = tk.Label(win, text="", bg=T.CARD_BG, fg=T.PRIMARY,
+                        font=("Microsoft YaHei", 9), justify=tk.LEFT)
+        info.pack(anchor=tk.W, padx=16, pady=(0, 6))
+
+        tk.Label(win,
+                 text="用手机系统相机扫码，App 会自动填入地址并配对。\n"
+                      "若相机不能直接打开 App，请在 App 里手动输入地址和配对码。\n"
+                      "USB 网络共享 / 手机热点 / 蓝牙 PAN 下，请选择对应网段的地址。",
+                 bg=T.CARD_BG, fg=T.TEXT_LIGHT, font=("Microsoft YaHei", 9),
+                 justify=tk.LEFT).pack(anchor=tk.W, padx=16, pady=(0, 10))
+
+        def current_link():
+            return self._pair_deeplink(ip_var.get().strip(), port, code, name)
+
+        def render(*_args):
+            deep = current_link()
+            self._render_qr_to(canvas, deep, 260)
+            info.config(text="配对码：%s    地址：%s:%d"
+                             % (code, ip_var.get().strip(), port))
+
+        def copy_link():
+            try:
+                self.app.root.clipboard_clear()
+                self.app.root.clipboard_append(current_link())
+                self.app.set_status("已复制 App 配对链接")
+            except Exception:
+                pass
+
+        combo.bind("<<ComboboxSelected>>", render)
+        bottom = tk.Frame(win, bg=T.CARD_BG)
+        bottom.pack(fill=tk.X, padx=16, pady=(0, 14))
+        self.app.button(bottom, "复制配对链接", copy_link,
+                        kind="ghost").pack(side=tk.LEFT)
+        self.app.button(bottom, "关闭", win.destroy,
+                        kind="ghost").pack(side=tk.RIGHT)
+        render()
+
+    def show_addresses(self):
+        """列出所有网卡地址，便于 USB/热点/蓝牙 PAN 场景选择"""
+        ips = get_local_ips()
+        port = self._listen_port()
+        if not ips:
+            self.app.show_warning("提示", "未获取到本机局域网地址，请检查网络连接")
+            return
+        lines = ["本机监听端口：%d" % port, "", "手机能访问的地址："]
+        for ip in ips:
+            lines.append("  http://%s:%d" % (ip, port))
+        lines += [
+            "",
+            "USB 网络共享 / 手机热点 / 蓝牙 PAN 建立后，这里会出现对应网段的地址。",
+            "选择手机所在网段的地址，再用「App 扫码配对」生成二维码。",
+            "没有 Wi-Fi 时：手机开启 USB 网络共享或热点，电脑连上后回到 App 点「自动发现」。",
+        ]
+        self.app.show_info("所有地址", "\n".join(lines))
 
     def _draw_qr_placeholder(self):
         c = self.qr_canvas

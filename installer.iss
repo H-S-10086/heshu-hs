@@ -1,7 +1,7 @@
 ; 合枢 HS - Inno Setup 安装脚本
 ; 展示名改品牌名，但安装目录、exe 文件名、AppId 保持不变，保证老用户原地升级
 #define MyAppName "合枢 HS"
-#define MyAppVersion "2.1.1"
+#define MyAppVersion "2.1.2"
 #define MyAppPublisher "Trae Software"
 #define MyAppExeName "C盘清理大师.exe"
 

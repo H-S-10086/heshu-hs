@@ -406,7 +406,7 @@ class CleanerApp:
         footer = tk.Frame(inner, bg=Theme.SIDEBAR)
         footer.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=12)
         if is_admin():
-            tk.Label(footer, text="合枢 HS  v2.1.1", bg=Theme.SIDEBAR, fg="#5a6b7c",
+            tk.Label(footer, text="合枢 HS  v2.1.2", bg=Theme.SIDEBAR, fg="#5a6b7c",
                      font=("Microsoft YaHei", 8), anchor=tk.W).pack(fill=tk.X)
             tk.Label(footer, text="✓ 已获得管理员权限", bg=Theme.SIDEBAR, fg="#73d13d",
                      font=("Microsoft YaHei", 8), anchor=tk.W).pack(fill=tk.X, pady=(2, 0))
