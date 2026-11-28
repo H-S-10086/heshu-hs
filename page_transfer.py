@@ -477,8 +477,15 @@ class TransferPage:
         from tkinter import filedialog
         d = filedialog.askdirectory(title="选择接收文件的保存目录",
                                     initialdir=self.engine.save_dir)
-        if d:
-            self.dir_var.set(d)
+        if not d:
+            return
+        # 立即应用并持久化：否则切页/重开后会回到默认目录
+        ok, res = self.engine.set_save_dir(d)
+        if ok:
+            self.dir_var.set(self.engine.save_dir)
+            self.app.set_status("接收目录已改为：" + self.engine.save_dir)
+        else:
+            self.app.show_error("目录无效", res)
 
     # ---------- 跨网络访问 ----------
 

@@ -119,20 +119,9 @@ public class MicSender {
     private void runSession() {
         AudioRecord rec = null;
         long startMs = 0;
+        boolean handshaked = false;
+        boolean readyNotified = false;
         try {
-            if (!LinkService.isConnected()) {
-                fail("未连接电脑");
-                return;
-            }
-            if (!LinkService.startMicStream(RATE, CHANNELS, BITS)) {
-                fail("发送录音请求失败");
-                return;
-            }
-            if (!LinkService.awaitMicAck(5000)) {
-                fail("电脑端未确认开始录音");
-                return;
-            }
-
             int minBuf = AudioRecord.getMinBufferSize(
                     RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             if (minBuf <= 0) {
@@ -153,12 +142,42 @@ public class MicSender {
                 return;
             }
             rec.startRecording();
-            startMs = SystemClock.elapsedRealtime();
-            ready();
 
             byte[] buf = new byte[CHUNK];
             long lastReport = 0;
-            while (!stopRequested && LinkService.isConnected()) {
+            // 注意：连接断开时不要退出线程。锁屏 / Wi-Fi 抖动会导致 WS 断开，
+            // 只要用户没主动停止，就保持录音并在重连后自动重新握手。
+            while (!stopRequested) {
+                if (!LinkService.isConnected()) {
+                    handshaked = false;
+                    // 读出来丢弃，防止 AudioRecord 内部缓冲堆积
+                    int n = rec.read(buf, 0, buf.length);
+                    if (n < 0) {
+                        fail("录音读取失败（" + n + "）");
+                        return;
+                    }
+                    sleepQuiet(120);
+                    continue;
+                }
+
+                if (!handshaked) {
+                    if (!LinkService.startMicStream(RATE, CHANNELS, BITS)) {
+                        sleepQuiet(500);
+                        continue;
+                    }
+                    if (!LinkService.awaitMicAck(5000)) {
+                        // 电脑端可能还占着上一段会话的麦克风，稍后重试
+                        sleepQuiet(800);
+                        continue;
+                    }
+                    handshaked = true;
+                    if (!readyNotified) {
+                        readyNotified = true;
+                        startMs = SystemClock.elapsedRealtime();
+                        ready();
+                    }
+                }
+
                 int n = rec.read(buf, 0, buf.length);
                 if (n < 0) {
                     fail("录音读取失败（" + n + "）");
@@ -169,10 +188,12 @@ public class MicSender {
                 }
                 byte[] chunk = (n == buf.length) ? buf : Arrays.copyOf(buf, n);
                 if (!LinkService.sendMicBinary(chunk)) {
-                    fail("音频发送失败，连接可能已断开");
-                    return;
+                    // 发送失败通常是连接刚断；不结束录音，等重连后重新握手
+                    handshaked = false;
+                    AppLog.add("麦克风发送中断，等待重连后自动恢复…");
+                } else {
+                    sentBytes += n;
                 }
-                sentBytes += n;
                 long now = SystemClock.elapsedRealtime();
                 if (now - lastReport >= 200) {
                     lastReport = now;
@@ -215,6 +236,13 @@ public class MicSender {
                 l.onStopped(LinkService.getMicMessage());
             } catch (Exception ignored) {
             }
+        }
+    }
+
+    private static void sleepQuiet(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException ignored) {
         }
     }
 

@@ -846,7 +846,7 @@ class TransferEngine:
         progress_callback : 进度回调 (percent, message)
         event_callback : 事件回调，收到文件/文字时触发，用于桌面端刷新
         """
-        self.save_dir = save_dir or self._default_save_dir()
+        self.save_dir = save_dir or self._load_saved_dir() or self._default_save_dir()
         self.port = port
         self.pin = (pin or "").strip()
         self.progress_callback = progress_callback
@@ -877,6 +877,35 @@ class TransferEngine:
             base = os.environ.get("TEMP", ".")
         return base
 
+    @staticmethod
+    def _settings_path():
+        """接收目录等设置存放位置（与配对数据同级，避免写进接收目录）"""
+        base = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")),
+                            "CleanMasterBackup")
+        return os.path.join(base, "transfer_settings.json")
+
+    def _load_saved_dir(self):
+        """读取上次选择的接收目录；目录不存在时回退默认目录"""
+        try:
+            with open(self._settings_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            saved = (data.get("save_dir") or "").strip()
+            if saved and os.path.isdir(saved):
+                return saved
+        except Exception:
+            pass
+        return ""
+
+    def _save_saved_dir(self):
+        try:
+            path = self._settings_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"save_dir": self.save_dir}, f,
+                          ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     def _emit(self, percent, message):
         if self.progress_callback:
             try:
@@ -892,14 +921,16 @@ class TransferEngine:
                 pass
 
     def set_save_dir(self, path):
-        """修改保存目录"""
+        """修改保存目录，并持久化到本机设置，下次启动/切页不再重置"""
         if not path:
             return False, "目录不能为空"
+        path = os.path.abspath(os.path.expanduser(str(path).strip()))
         try:
             os.makedirs(path, exist_ok=True)
         except Exception as e:
             return False, f"无法创建目录：{e}"
         self.save_dir = path
+        self._save_saved_dir()
         return True, path
 
     # ---------- 服务控制 ----------

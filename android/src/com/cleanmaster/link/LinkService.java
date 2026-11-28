@@ -7,12 +7,15 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
 import android.net.Network;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 
 import org.json.JSONObject;
 
@@ -95,6 +98,10 @@ public class LinkService extends Service {
     private String lastNotifText = "";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    /** 连接级息屏保活：CPU 与 Wi-Fi 都要锁住，否则锁屏后 Doze 会断网 */
+    private PowerManager.WakeLock connWakeLock;
+    private WifiManager.WifiLock wifiLock;
 
     // ==================== 静态入口 ====================
 
@@ -331,6 +338,62 @@ public class LinkService extends Service {
 
     // ==================== 生命周期 ====================
 
+    /**
+     * 连接级息屏保活。
+     *
+     * 前台服务只能防止进程被回收，不能阻止 CPU 休眠和 Wi-Fi 省电；
+     * 锁屏后 Doze 会暂停网络，导致 WebSocket 心跳超时、整机断连。
+     * 这里在服务运行期间持有 PARTIAL_WAKE_LOCK + WIFI_MODE_FULL_HIGH_PERF，
+     * 代价是耗电增加，但换来锁屏后的持续连接与麦克风。
+     */
+    private void acquireConnectionLocks() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null) {
+                if (connWakeLock == null) {
+                    connWakeLock = pm.newWakeLock(
+                            PowerManager.PARTIAL_WAKE_LOCK, "cmlink:conn");
+                    connWakeLock.setReferenceCounted(false);
+                }
+                if (!connWakeLock.isHeld()) {
+                    connWakeLock.acquire();
+                }
+            }
+            WifiManager wm = (WifiManager) getApplicationContext()
+                    .getSystemService(WIFI_SERVICE);
+            if (wm != null) {
+                if (wifiLock == null) {
+                    wifiLock = wm.createWifiLock(
+                            WifiManager.WIFI_MODE_FULL_HIGH_PERF, "cmlink:wifi");
+                    wifiLock.setReferenceCounted(false);
+                }
+                if (!wifiLock.isHeld()) {
+                    wifiLock.acquire();
+                }
+            }
+            AppLog.add("已启用息屏保活（CPU + Wi-Fi 唤醒锁）");
+        } catch (Exception e) {
+            AppLog.add("息屏保活启用失败：" + e.getMessage());
+        }
+    }
+
+    private void releaseConnectionLocks() {
+        try {
+            if (connWakeLock != null && connWakeLock.isHeld()) {
+                connWakeLock.release();
+            }
+        } catch (Exception ignored) {
+        }
+        connWakeLock = null;
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) {
+                wifiLock.release();
+            }
+        } catch (Exception ignored) {
+        }
+        wifiLock = null;
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -343,6 +406,7 @@ public class LinkService extends Service {
 
         createChannel();
         startForegroundCompat("正在连接电脑…");
+        acquireConnectionLocks();
 
         registerNetworkCallback();
 
@@ -382,6 +446,7 @@ public class LinkService extends Service {
         // 先礼貌告别，电脑端会立刻把本机从设备列表里移除
         sendBye();
         running = false;
+        releaseConnectionLocks();
         authFailed = true;          // 阻止重连循环继续
         sConnected = false;
         sServerName = "";
@@ -978,7 +1043,16 @@ public class LinkService extends Service {
 
     private void startForegroundCompat(String text) {
         try {
-            startForeground(NOTIF_ID, buildNotification(text));
+            if (Build.VERSION.SDK_INT >= 29) {
+                int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+                if (Build.VERSION.SDK_INT >= 30) {
+                    // 锁屏后继续采集麦克风，需要把前台服务声明为 microphone 类型
+                    type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+                }
+                startForeground(NOTIF_ID, buildNotification(text), type);
+            } else {
+                startForeground(NOTIF_ID, buildNotification(text));
+            }
             lastNotifText = text;
         } catch (Exception e) {
             AppLog.add("前台通知创建失败：" + e.getMessage());

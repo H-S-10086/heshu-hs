@@ -10,6 +10,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -26,6 +27,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
@@ -430,6 +432,17 @@ public class MainActivity extends Activity
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         recLp.topMargin = dp(6);
         connCard.addView(btnReconnect, recLp);
+
+        TextView btnKeepAlive = smallButton("后台保活设置");
+        btnKeepAlive.setOnClickListener(this);
+        LinearLayout.LayoutParams kaLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        kaLp.topMargin = dp(6);
+        connCard.addView(btnKeepAlive, kaLp);
+        TextView kaHint = label("锁屏掉线？允许忽略电池优化与自启动", 11);
+        kaHint.setTextColor(COLOR_SUB);
+        connCard.addView(kaHint);
+
         root.addView(connCard);
 
         // ---- 第一排按钮 ----
@@ -685,6 +698,8 @@ public class MainActivity extends Activity
                 pickFiles();
             } else if ("全屏".equals(s)) {
                 showFullEditor();
+            } else if ("后台保活设置".equals(s)) {
+                showKeepAliveDialog();
             }
         }
     }
@@ -1348,6 +1363,80 @@ public class MainActivity extends Activity
                 refreshState();
             }
         }, 600);
+    }
+
+    private void showKeepAliveDialog() {
+        boolean ignoring = false;
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            ignoring = pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+        } catch (Exception ignored) {
+        }
+        String status = ignoring ? "当前状态：已忽略电池优化" : "当前状态：仍受电池优化限制";
+        new AlertDialog.Builder(this)
+                .setTitle("后台保活")
+                .setMessage("锁屏后要保持连接与麦克风，请完成两项设置：\n"
+                        + "1. 允许本应用忽略电池优化\n"
+                        + "2. 在系统设置中允许自启动 / 后台运行\n\n"
+                        + status + "\n\n"
+                        + "部分手机还需要在最近任务里锁定本应用。")
+                .setPositiveButton("忽略电池优化", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        openBatteryOptimization();
+                    }
+                })
+                .setNeutralButton("自启动设置", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        openAutoStartSettings();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void openBatteryOptimization() {
+        try {
+            Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception e) {
+            try {
+                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Exception e2) {
+                toast("无法打开电池优化设置，请手动到系统设置中允许后台运行");
+            }
+        }
+    }
+
+    private void openAutoStartSettings() {
+        String[][] targets = {
+                {"com.miui.securitycenter",
+                        "com.miui.permcenter.autostart.AutoStartManagementActivity"},
+                {"com.huawei.systemmanager",
+                        "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"},
+                {"com.coloros.safecenter",
+                        "com.coloros.safecenter.permission.startup.StartupAppListActivity"},
+                {"com.vivo.permissionmanager",
+                        "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"},
+        };
+        for (String[] t : targets) {
+            try {
+                Intent i = new Intent();
+                i.setComponent(new ComponentName(t[0], t[1]));
+                startActivity(i);
+                return;
+            } catch (Exception ignored) {
+            }
+        }
+        try {
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName())));
+            toast("请在应用详情里允许自启动 / 后台运行");
+        } catch (Exception e) {
+            toast("无法打开自启动设置，请手动到系统设置中允许后台运行");
+        }
     }
 
     private void showManualDialog() {

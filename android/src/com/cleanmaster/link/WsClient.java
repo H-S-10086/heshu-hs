@@ -80,6 +80,7 @@ public class WsClient {
         s.connect(new InetSocketAddress(host, port), 8000);
         s.setSoTimeout(8000);          // 握手阶段的读超时
         s.setTcpNoDelay(true);
+        s.setKeepAlive(true);          // 让系统帮忙探测半开连接
         socket = s;
         in = new BufferedInputStream(s.getInputStream());
         out = s.getOutputStream();
